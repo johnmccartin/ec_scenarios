@@ -1,71 +1,13 @@
-/*
-
-
-
-
-CITYWIDE PARCELS CLEANED
-	landarea_new: GIS calculated $area
-	study_area: name of study area
-	dist_type: study area type (‘corridor’ or ‘transforming area’)
-	never_soft: a spotcheck boolean for parcels that are never soft
-	use_cat: given use category
-	use_subcat: given use subcategory
-	new_land_use: land use based on utile interpretation of LU codes
-	tot_gfa: total GFA per buildout data
-	resi_gfa: residential GFA per buildout data
-	nonresi_gfa: nonresidentail GFA per buildtout data
-	comm_gfa: nonresi_gfa where new_land_use = commercial and use_subcat not in (retail,food)
-	retail_gfa: nonresi_gfa where new_land_use = commercial and use_subcat in (retail,food) or where new_land_use = mixed_use
-	lab_gfa: nonresi_gfa where new_land_use = R&D
-	insti_gfa: nonresi_gfa where new_land_use in (institutional, higher ed)
-	indus_gfa: nonresi_gfa where new_land_use = industrial
-	other_gfa: nonresi_gfa where new_land_use in (open space,transportation,other)
-	h_units: given housing units
-	pl_gfa: gfa for permitted pipeline projects
-	pl_resi: residential gfa for permitted pipeline projects
-	pl_commrd: commercial/r&d gfa for permitted pipeline projects
-	pl_retail: retail gfa for permitted pipeline projects
-	pl_units: housing units from permitted pipeline projects
-	pl_affunits: affordable housing units from permitted pipeline projects
-	built_gfa: if pl_gfa then pl_gfa else tot_gfa
-	built_resi: if pl_resi then pl_resi else resi_gfa
-	built_comm: if pl_commrd then pl_commrd * 0.5 else comm_gfa
-	built_lab: if pl_commrd then pl_commrd * 0.5 else lab_gfa
-	built_retail: if pl_retail then pl_retail else retail_gfa
-	built_insti: insti_gfa
-	built_indus: indus_gfa
-	built_other: other_gfa
-	built_units: if pl_units then pl_units else h_units
-	built_affunits: if pl_affunits then pl_affunits else 0
-
-
-BASE ZONING DISTRICTS
-	zoning_type: name of zone
-
-OVERLAY ZONING DISTRICTS
-	name: name of zone
-
-ZONING FAR LOOKUP TABLE
-	base_name
-	overlay_name
-	zoning_condition : concatenated base_name + overlay_name
-	far_comm
-	far_resi
-	far_incl
-	far_max
-
-*/
 
 
 --I
 do $$
 
-declare BASELINE__GFA_DELTA_THRESHOLD int := 5000;
+declare BASELINE__GFA_DELTA_THRESHOLD int := 10000;
 declare BASELINE__GFA_RATIO_THRESHOLD numeric(5,2) := 0.5;
+declare BASELINE__MIN_COMM_DEPTH int := 80;
+declare BASELINE__MIN_COMM_AREA int := 17000;
 declare PIPELINE__COMM_AS_PCT_COMMRD numeric(5,2) := 0.5;
-
-
-declare AGGREGATE_ACROSS_STUDY_AREAS boolean := false;
 
 
 begin
@@ -151,35 +93,6 @@ create index parcels_citywide_clean_tmp_geom_idx
 
 
 
-/***************************************************
-
-	part 2: pull additional pipeline data to calculate
-			net new GFAs later
-
-THIS ONLY HAPPENS ONCE
-
-
---create table for csv import
-drop table if exists p1533_cambridge.devt_log_use_current_013018;
-create table p1533_cambridge.devt_log_use_current_013018 (
-	proj_id varchar default null primary key,
-	pl_resi int default 0,
-	pl_commrd int default 0,
-	pl_retail int default 0,
-	pl_insti int default 0,
-	pl_other int default 0
-);
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-		YOU MUST IMPORT THE PIPELINE USE CSV NOW
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~	 
-
-
-***************************************************					*/
 
 
 delete from p1533_cambridge_scenarios.parcels_citywide_clean_tmp
@@ -265,7 +178,9 @@ create table p1533_cambridge_scenarios.parcels_citywide_clean as
 		parcels.*,
 		master.study_area,
 		master.neversoft as never_soft,
-		master.dist_type
+		master.dist_type,
+		master.frontage_ft,
+		master.depth_cutoff
 	from p1533_cambridge_scenarios.parcels_citywide_clean_tmp2 parcels
 	left join p1533_cambridge_scenarios.scenario_parcels_masterlist master
 	on parcels.maplot = master.maplot;
@@ -275,13 +190,24 @@ create index parcels_citywide_clean_geom_idx
 	on p1533_cambridge_scenarios.parcels_citywide_clean
 	using gist(geom);
 
+alter table p1533_cambridge_scenarios.parcels_citywide_clean
+	add column comm_possible boolean default false;
+
+update p1533_cambridge_scenarios.parcels_citywide_clean
+	set comm_possible =
+		case
+			when landarea_new >= BASELINE__MIN_COMM_AREA and depth_cutoff >= BASELINE__MIN_COMM_DEPTH  and (study_area like 'cambst_%' or study_area like 'massave_%')
+			then true
+			when landarea_new >= BASELINE__MIN_COMM_AREA and (study_area is not null and study_area not like 'cambst_%' and study_area not like 'massave_%')
+			then true
+			else false
+		end;
+
 
 --clean up
 drop table if exists p1533_cambridge_scenarios.parcels_citywide_clean_tmp;
 drop table if exists p1533_cambridge_scenarios.parcels_citywide_clean_tmp2;
 drop index if exists parcels_citywide_clean_tmp_geom_idx;
-
-
 
 
 
@@ -313,6 +239,8 @@ create table p1533_cambridge_scenarios.parcel_base_intersection as
 	select
 		parcel.maplot,
 		parcel.landarea_new,
+		parcel.depth_cutoff,
+		parcel.comm_possible,
 		base.zone_type as zoning_base,
 		ST_Intersection(parcel.geom,base.geom) as geom
 	from p1533_cambridge_scenarios.scenario_parcels as parcel,
@@ -331,6 +259,8 @@ create table p1533_cambridge_scenarios.parcel_ovr_intersection as
 	select
 		parbase.maplot,
 		parbase.landarea_new,
+		parbase.depth_cutoff,
+		parbase.comm_possible,
 		parbase.zoning_base,
 		ovr.name as zoning_overlay,
 		ST_Intersection(parbase.geom,ovr.geom) as geom
@@ -365,6 +295,8 @@ create table p1533_cambridge_scenarios.parcel_ovr_difference as
 	select
 		parbase.maplot,
 		parbase.landarea_new,
+		parbase.depth_cutoff,
+		parbase.comm_possible,
 		parbase.zoning_base,
 		cast(null as varchar) as zoning_overlay,
 		parbase.geom
@@ -408,23 +340,46 @@ update p1533_cambridge_scenarios.parcel_zng_merge
 	where zoning_overlay is not null;
 
 
+
+
 -- Join the FAR info
 drop table if exists p1533_cambridge_scenarios.parcel_far_join;
 create table p1533_cambridge_scenarios.parcel_far_join as
 	select
 		parcel.*,
-		far.far_max
+		far.far_comm,
+		far.far_resi,
+		far.far_resinc,
+		far.far_max,
+		far.far_ratio
 	from p1533_cambridge_scenarios.parcel_zng_merge as parcel
 	left join p1533_cambridge_scenarios.zoning_lookup as far
-	on parcel.zoning_condition = far.zoning_condition;
+	on parcel.zoning_condition = far.zng_condition;
+
+alter table p1533_cambridge_scenarios.parcel_far_join
+	add column scenario_use varchar null;
+
+update p1533_cambridge_scenarios.parcel_far_join
+	set scenario_use =
+		case
+			when comm_possible = true and far_ratio < 1.5
+			then 'comm_etc'
+			else 'resi'
+		end;
 
 
--- Calculate the max allowed GFA on the subparcel
 alter table p1533_cambridge_scenarios.parcel_far_join
 	add column allowed_gfa int null;
 
+
 update p1533_cambridge_scenarios.parcel_far_join
-	set allowed_gfa = part_land * far_max;
+	set allowed_gfa = 
+		case
+			when scenario_use = 'comm_etc'
+			then part_land * far_comm
+			when scenario_use = 'resi'
+			then part_land * far_resinc
+		end;
 
 
 
@@ -435,6 +390,7 @@ create table p1533_cambridge_scenarios.parcel_new_development as
 	select
 		parcel.*,
 		array_agg(subparcel.zoning_condition) as zoning_condition,
+		array_agg(subparcel.scenario_use) as scenario_use,
 		sum(subparcel.allowed_gfa) as allowed_gfa
 	from p1533_cambridge_scenarios.scenario_parcels as parcel
 	left join p1533_cambridge_scenarios.parcel_far_join as subparcel
@@ -445,6 +401,19 @@ drop index if exists parcel_new_development_geom_idx;
 create index parcel_new_development_geom_idx
 	on p1533_cambridge_scenarios.parcel_new_development
 	using gist(geom);
+
+alter table p1533_cambridge_scenarios.parcel_new_development
+	add column allowed_nonresi int default 0,
+	add column allowed_resi int default 0;
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set allowed_nonresi = allowed_gfa
+	where not 'resi' = any (scenario_use);
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set allowed_resi = allowed_gfa
+	where 'resi' = any (scenario_use);
+
 
 
 -- Calculate GFA Delta and GFA Ratio
@@ -540,6 +509,25 @@ create table p1533_cambridge_scenarios.baseline_calcs_by_area as
 	select
 		dist_type,
 		study_area,
+		sum(tot_gfa) exis_gfa,
+		sum(resi_gfa) exis_resi,
+		sum(h_units) exis_units,
+		sum(comm_gfa) exis_comm,
+		sum(retail_gfa) exis_retail,
+		sum(lab_gfa) exis_lab,
+		sum(insti_gfa) exis_insti,
+		sum(indus_gfa) exis_indus,
+		sum(other_gfa) exis_other,
+
+		sum(pl_gfa) pl_gfa,
+		sum(pl_resi) pl_resi,
+		sum(pl_units) pl_units,
+		sum(pl_comm) pl_comm,
+		sum(pl_retail) pl_retail,
+		sum(pl_lab) pl_lab,
+		sum(pl_insti) pl_insti,
+		sum(pl_other) pl_other,
+
 		sum(built_gfa) built_gfa,
 		sum(built_resi) built_resi,
 		sum(built_units) built_units,
@@ -549,7 +537,11 @@ create table p1533_cambridge_scenarios.baseline_calcs_by_area as
 		sum(built_insti) built_insti,
 		sum(built_indus) built_indus,
 		sum(built_other) built_other,
-		sum(allowed_gfa) allowed_gfa
+
+		sum(allowed_gfa) allowed_gfa,
+		sum(allowed_resi) allowed_resi,
+		sum(allowed_nonresi) allowed_nonresi
+
 	from p1533_cambridge_scenarios.parcel_new_development
 	where softsite = true
 	group by dist_type, study_area
