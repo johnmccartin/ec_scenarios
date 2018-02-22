@@ -62,3 +62,14 @@ update p1533_cambridge_scenarios.scenario_parcels_masterlist
 alter table p1533_cambridge_scenarios.scenario_parcels_masterlist
 	add column depth_cutoff int null;
 
+update p1533_cambridge_scenarios.scenario_parcels_masterlist as parcel
+	set depth_cutoff =
+		case
+			when ST_Within(parcel.geom,ST_Buffer(fronts.geom,60)) then 60
+			when ST_Within(parcel.geom,ST_Buffer(fronts.geom,80)) then 80
+			when ST_Within(parcel.geom,ST_Buffer(fronts.geom,90)) then 90
+			when ST_Within(parcel.geom,ST_Buffer(fronts.geom,120)) then 120
+			else 999
+		end
+	from p1533_cambridge_scenarios.corridor_fronts as fronts
+	where parcel.study_area like 'massave_%' or parcel.study_area like 'cambst_%';

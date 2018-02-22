@@ -7,6 +7,7 @@ declare BASELINE__GFA_DELTA_THRESHOLD int := 10000;
 declare BASELINE__GFA_RATIO_THRESHOLD numeric(5,2) := 0.5;
 declare BASELINE__MIN_COMM_DEPTH int := 80;
 declare BASELINE__MIN_COMM_AREA int := 17000;
+declare BASELINE__RESI_INCENTIVE_THRESHOLD numeric(5,2) := 1.5;
 declare PIPELINE__COMM_AS_PCT_COMMRD numeric(5,2) := 0.5;
 
 
@@ -357,30 +358,12 @@ create table p1533_cambridge_scenarios.parcel_far_join as
 	on parcel.zoning_condition = far.zng_condition;
 
 alter table p1533_cambridge_scenarios.parcel_far_join
-	add column scenario_use varchar null;
+	add column allowed_gfa_resi int default null,
+	add column allowed_gfa_comm int default null;
 
 update p1533_cambridge_scenarios.parcel_far_join
-	set scenario_use =
-		case
-			when comm_possible = true and far_ratio < 1.5
-			then 'comm_etc'
-			else 'resi'
-		end;
-
-
-alter table p1533_cambridge_scenarios.parcel_far_join
-	add column allowed_gfa int null;
-
-
-update p1533_cambridge_scenarios.parcel_far_join
-	set allowed_gfa = 
-		case
-			when scenario_use = 'comm_etc'
-			then part_land * far_comm
-			when scenario_use = 'resi'
-			then part_land * far_resinc
-		end;
-
+	set allowed_gfa_resi = part_land * far_resinc,
+		allowed_gfa_comm = part_land * far_comm;
 
 
 -- Sum the allowed GFA from subparcels into the parcel itself
@@ -390,8 +373,8 @@ create table p1533_cambridge_scenarios.parcel_new_development as
 	select
 		parcel.*,
 		array_agg(subparcel.zoning_condition) as zoning_condition,
-		array_agg(subparcel.scenario_use) as scenario_use,
-		sum(subparcel.allowed_gfa) as allowed_gfa
+		sum(subparcel.allowed_gfa_resi) as allowed_gfa_resi,
+		sum(subparcel.allowed_gfa_comm) as allowed_gfa_comm
 	from p1533_cambridge_scenarios.scenario_parcels as parcel
 	left join p1533_cambridge_scenarios.parcel_far_join as subparcel
 	on parcel.maplot = subparcel.maplot
@@ -403,17 +386,26 @@ create index parcel_new_development_geom_idx
 	using gist(geom);
 
 alter table p1533_cambridge_scenarios.parcel_new_development
-	add column allowed_nonresi int default 0,
-	add column allowed_resi int default 0;
+	add column allowed_gfa_choice int default null,
+	add column scenario_use varchar default null;
 
 update p1533_cambridge_scenarios.parcel_new_development
-	set allowed_nonresi = allowed_gfa
-	where not 'resi' = any (scenario_use);
+	set allowed_gfa_choice =
+		case
+			when comm_possible = true and (allowed_gfa_comm = 0 or allowed_gfa_comm is null) then allowed_gfa_resi
+			when comm_possible = true and ( allowed_gfa_resi / allowed_gfa_comm >= BASELINE__RESI_INCENTIVE_THRESHOLD ) then allowed_gfa_resi
+			when comm_possible = true and ( allowed_gfa_resi / allowed_gfa_comm < BASELINE__RESI_INCENTIVE_THRESHOLD ) then allowed_gfa_comm
+			when comm_possible = false then allowed_gfa_resi
+		end;
 
 update p1533_cambridge_scenarios.parcel_new_development
-	set allowed_resi = allowed_gfa
-	where 'resi' = any (scenario_use);
-
+	set scenario_use =
+		case
+			when comm_possible = true and (allowed_gfa_comm = 0 or allowed_gfa_comm is null) then 'resi'
+			when comm_possible = true and ( allowed_gfa_resi / allowed_gfa_comm >= BASELINE__RESI_INCENTIVE_THRESHOLD ) then 'resi'
+			when comm_possible = true and ( allowed_gfa_resi / allowed_gfa_comm < BASELINE__RESI_INCENTIVE_THRESHOLD ) then 'nonresi'
+			when comm_possible = false then 'resi'
+		end;
 
 
 -- Calculate GFA Delta and GFA Ratio
@@ -425,8 +417,8 @@ update p1533_cambridge_scenarios.parcel_new_development
 	set gfa_delta = 
 		case
 			when built_gfa is not null
-			then allowed_gfa - built_gfa
-			else allowed_gfa
+			then allowed_gfa_choice - built_gfa
+			else allowed_gfa_choice
 		end;
 
 update p1533_cambridge_scenarios.parcel_new_development
@@ -438,7 +430,77 @@ update p1533_cambridge_scenarios.parcel_new_development
 		end; 
 
 
+alter table p1533_cambridge_scenarios.parcel_new_development
+	add column allowed_gfa_resi_guaranteed int default 0,
+	add column allowed_gfa_resi_contingent int default 0,
+	add column allowed_gfa_comm_contingent int default 0;
 
+update p1533_cambridge_scenarios.parcel_new_development
+	set allowed_gfa_resi_guaranteed = allowed_gfa_resi 
+	where scenario_use = 'resi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	allowed_gfa_resi_contingent = allowed_gfa_resi 
+	where scenario_use = 'nonresi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	allowed_gfa_comm_contingent = allowed_gfa_comm 
+	where scenario_use = 'nonresi';
+
+
+alter table p1533_cambridge_scenarios.parcel_new_development
+	add column landarea_guaranteed int default 0,
+	add column landarea_contingent int default 0,
+	add column built_resi_guaranteed int default 0,
+	add column built_resi_contingent int default 0,
+	add column built_nonresi_guaranteed int default 0,
+	add column built_nonresi_contingent int default 0,
+	add column built_units_guaranteed int default 0,
+	add column built_units_contingent int default 0,
+	add column built_retail_guaranteed int default 0,
+	add column built_retail_contingent int default 0;
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	landarea_guaranteed = landarea_new 
+	where scenario_use = 'resi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	landarea_contingent = landarea_new 
+	where scenario_use = 'nonresi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_resi_guaranteed = built_resi 
+	where scenario_use = 'resi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_resi_contingent = built_resi 
+	where scenario_use = 'nonresi';
+
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_nonresi_guaranteed = built_gfa - built_resi 
+	where scenario_use = 'resi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_nonresi_contingent = built_gfa - built_resi 
+	where scenario_use = 'nonresi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_units_guaranteed = built_units
+	where scenario_use = 'resi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_units_contingent = built_units 
+	where scenario_use = 'nonresi';
+
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_retail_guaranteed = built_retail
+	where scenario_use = 'resi';
+
+update p1533_cambridge_scenarios.parcel_new_development
+	set	built_retail_contingent = built_retail 
+	where scenario_use = 'nonresi';
 
 
 
@@ -503,6 +565,7 @@ update p1533_cambridge_scenarios.parcel_new_development
 
 ***************************************************/
 
+/*
 
 drop table if exists p1533_cambridge_scenarios.baseline_calcs_by_area;
 create table p1533_cambridge_scenarios.baseline_calcs_by_area as
@@ -538,9 +601,38 @@ create table p1533_cambridge_scenarios.baseline_calcs_by_area as
 		sum(built_indus) built_indus,
 		sum(built_other) built_other,
 
-		sum(allowed_gfa) allowed_gfa,
-		sum(allowed_resi) allowed_resi,
-		sum(allowed_nonresi) allowed_nonresi
+		sum(allowed_gfa_choice) allowed_gfa_choice,
+		sum(allowed_gfa_resi_guaranteed) allowed_gfa_resi_guaranteed,
+		sum(allowed_gfa_resi_contingent) allowed_gfa_resi_contingent,
+		sum(allowed_gfa_comm_contingent) allowed_gfa_comm_contingent
+
+	from p1533_cambridge_scenarios.parcel_new_development
+	where softsite = true
+	group by dist_type, study_area
+	order by dist_type, study_area;
+
+*/
+
+
+drop table if exists p1533_cambridge_scenarios.baseline_calcs_by_area;
+create table p1533_cambridge_scenarios.baseline_calcs_by_area as
+	select
+		dist_type,
+		study_area,
+		sum(landarea_guaranteed) landarea_guaranteed,
+		sum(landarea_contingent) landarea_contingent,
+		sum(built_gfa) built_gfa,
+		sum(built_resi_guaranteed) built_resi_guaranteed,
+		sum(built_nonresi_guaranteed) built_nonresi_guaranteed,
+		sum(built_resi_contingent) built_resi_contingent,
+		sum(built_nonresi_contingent) built_nonresi_contingent,
+		sum(built_units_guaranteed) built_units_guaranteed,
+		sum(built_units_contingent) built_units_contingent,
+
+		sum(allowed_gfa_choice) allowed_gfa_choice,
+		sum(allowed_gfa_resi_guaranteed) allowed_gfa_resi_guaranteed,
+		sum(allowed_gfa_resi_contingent) allowed_gfa_resi_contingent,
+		sum(allowed_gfa_comm_contingent) allowed_gfa_comm_contingent
 
 	from p1533_cambridge_scenarios.parcel_new_development
 	where softsite = true
@@ -550,11 +642,8 @@ create table p1533_cambridge_scenarios.baseline_calcs_by_area as
 
 
 
-
-
-
 --clean up
-/*
+
 drop table if exists
 	p1533_cambridge_scenarios.parcel_base_intersection,
 	p1533_cambridge_scenarios.parcel_far_join,
@@ -564,7 +653,7 @@ drop table if exists
 	p1533_cambridge_scenarios.parcels_citywide_clean,
 	p1533_cambridge_scenarios.scenario_parcels,
 	p1533_cambridge_scenarios.zoning_overlay_edits_union;
-*/
+
 
 
 
