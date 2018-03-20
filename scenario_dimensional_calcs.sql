@@ -62,6 +62,9 @@ update p1533_cambridge_scenarios.scenario_parcels_masterlist
 alter table p1533_cambridge_scenarios.scenario_parcels_masterlist
 	add column depth_cutoff int null;
 
+
+
+/*
 update p1533_cambridge_scenarios.scenario_parcels_masterlist as parcel
 	set depth_cutoff =
 		case
@@ -73,3 +76,72 @@ update p1533_cambridge_scenarios.scenario_parcels_masterlist as parcel
 		end
 	from p1533_cambridge_scenarios.corridor_fronts as fronts
 	where parcel.study_area like 'massave_%' or parcel.study_area like 'cambst_%';
+
+*/
+
+drop table if exists p1533_cambridge_scenarios.corridor_fronts_b60;
+create table p1533_cambridge_scenarios.corridor_fronts_b60 as
+	select
+		ST_Union(St_Buffer(fronts.geom,60)) as geom
+	from p1533_cambridge_scenarios.corridor_fronts as fronts;
+drop index if exists corridor_fronts_b60_geom_idx;
+create index corridor_fronts_b60_geom_idx
+	on p1533_cambridge_scenarios.corridor_fronts_b60
+	using gist(geom);
+
+drop table if exists p1533_cambridge_scenarios.corridor_fronts_b80;
+create table p1533_cambridge_scenarios.corridor_fronts_b80 as
+	select
+		ST_Union(St_Buffer(fronts.geom,80)) as geom
+	from p1533_cambridge_scenarios.corridor_fronts as fronts;
+drop index if exists corridor_fronts_b80_geom_idx;
+create index corridor_fronts_b80_geom_idx
+	on p1533_cambridge_scenarios.corridor_fronts_b80
+	using gist(geom);
+
+drop table if exists p1533_cambridge_scenarios.corridor_fronts_b90;
+create table p1533_cambridge_scenarios.corridor_fronts_b90 as
+	select
+		ST_Union(St_Buffer(fronts.geom,90)) as geom
+	from p1533_cambridge_scenarios.corridor_fronts as fronts;
+drop index if exists corridor_fronts_b90_geom_idx;
+create index corridor_fronts_b90_geom_idx
+	on p1533_cambridge_scenarios.corridor_fronts_b90
+	using gist(geom);
+
+drop table if exists p1533_cambridge_scenarios.corridor_fronts_b120;
+create table p1533_cambridge_scenarios.corridor_fronts_b120 as
+	select
+		ST_Union(St_Buffer(fronts.geom,120)) as geom
+	from p1533_cambridge_scenarios.corridor_fronts as fronts;
+drop index if exists corridor_fronts_b120_geom_idx;
+create index corridor_fronts_b120_geom_idx
+	on p1533_cambridge_scenarios.corridor_fronts_b120
+	using gist(geom);
+
+
+
+
+
+
+alter table p1533_cambridge_scenarios.scenario_parcels_masterlist
+	add column depth_cutoff2 int null;
+
+
+update p1533_cambridge_scenarios.scenario_parcels_masterlist as parcel
+	set depth_cutoff2 =
+		case
+			when ST_Within(parcel.geom,b60.geom) then 60
+			when ST_Within(parcel.geom,b80.geom) then 80
+			when ST_Within(parcel.geom,b90.geom) then 90
+			when ST_Within(parcel.geom,b120.geom) then 120
+			else 999
+		end
+	from p1533_cambridge_scenarios.corridor_fronts_b60 as b60,
+		 p1533_cambridge_scenarios.corridor_fronts_b80 as b80,
+		 p1533_cambridge_scenarios.corridor_fronts_b90 as b90,
+		 p1533_cambridge_scenarios.corridor_fronts_b120 as b120
+	where parcel.study_area like 'massave_%' or parcel.study_area like 'cambst_%';
+
+
+drop table if exists p1533_cambridge_scenarios.corridor_fronts

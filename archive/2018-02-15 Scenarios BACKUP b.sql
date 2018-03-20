@@ -314,6 +314,7 @@ create index scenario_parcels_geom_idx
 alter table p1533_cambridge_scenarios.scenario_parcels
 	add primary key (maplot);
 
+
 --Intersect parcels by base zoning. This should leave all parcel geometries there, just split into n geometries where the parcel is covered by more than one.
 drop table if exists p1533_cambridge_scenarios.parcel_base_intersection;
 create table p1533_cambridge_scenarios.parcel_base_intersection as
