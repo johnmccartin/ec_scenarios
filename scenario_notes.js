@@ -1,4 +1,4 @@
-1. teardowns: is this big enough
+1. teardowns: is this big enough for sixpack
 		if so, is AV  psf sig dif from AV in neighborhood 
 
 2. double lots: is parcel size more than avg parcel size in n'hood

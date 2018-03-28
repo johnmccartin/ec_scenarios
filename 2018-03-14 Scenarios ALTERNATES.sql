@@ -12,7 +12,7 @@ declare BASELINE__MIN_COMM_AREA int := 17000;
 declare BASELINE__RESI_INCENTIVE_THRESHOLD numeric(5,2) := 2.0;
 declare PIPELINE__COMM_AS_PCT_COMMRD numeric(5,2) := 0.5;
 
-declare ALTERNATE__CORR_PARCEL_FILL numeric(5,2) := 0.60;
+declare ALTERNATE__CORR_PARCEL_FILL numeric(5,2) := 0.75;
 declare ALTERNATE__TRAN_FAR numeric(5,2) := 2.35;
 
 declare ALTERNATE__SOFTSITE_YEAR_MIN int := 1945;
